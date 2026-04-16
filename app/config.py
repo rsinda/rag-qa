@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # LLM
-LLM_MODEL_NAME: str = os.getenv("LLM_MODEL_NAME", "gemini-3.1-flash-live-preview")
+LLM_MODEL_NAME: str = os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash")
 LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
 
 # Sentence Transformer Embeddings
@@ -19,4 +19,6 @@ QDRANT_PORT: int = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "rag_qa")
 QDRANT_API_KEY: str = os.getenv("QDRANT_API_KEY", "")
 
-RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", "5"))
+RETRIEVAL_TOP_K_PRIMARY: int = 4
+RETRIEVAL_TOP_K_FALLBACK: int = 3
+SELF_RAG_MAX_RETRIES: int = 2
