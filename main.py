@@ -37,6 +37,8 @@ def ask(req: AskRequest):
         citations=[Citation(**c) for c in state["citations"]],
         trace=TraceInfo(
             retrieval_count=state["retrieval_count"],
+            graded_relevant=len(state["relevant_hits"]),
+            fallback_used=state["fallback_used"],
             latency_ms=state["latency_ms"],
             model=state["model"],
         ),

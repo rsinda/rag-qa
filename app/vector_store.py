@@ -20,6 +20,8 @@ from app.config import (
     QDRANT_COLLECTION,
     QDRANT_API_KEY,
     EMBEDDING_DIM,
+    RETRIEVAL_TOP_K_PRIMARY,
+    RETRIEVAL_TOP_K_FALLBACK,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,47 +122,88 @@ class ContentVectorStore:
     ) -> List[Dict[str, Any]]:
         """
         Return top-k documents scoped to (country, language).
+        Two-pass weighted retrieval.
+            Primary   (weight=1.0): exact country + exact language
+            Fallback  (weight=0.7): exact country + any other language
+
+        Scores are normalised and merged. The country filter NEVER relaxes.
+
         """
         query_vector = self._embed([query_text])[0]
 
-        tenant_filter = Filter(
+        # 1st Pass
+        primary_filter = Filter(
             must=[
                 FieldCondition(key="country", match=MatchValue(value=country)),
                 FieldCondition(key="language", match=MatchValue(value=language)),
             ]
         )
+        primary_hits = self._client.query_points(
+            collection_name=QDRANT_COLLECTION,
+            query=query_vector,
+            query_filter=primary_filter,
+            limit=RETRIEVAL_TOP_K_PRIMARY,
+            with_payload=True,
+        )
 
-        try:
-            results = self._client.query_points(
-                collection_name=QDRANT_COLLECTION,
-                query=query_vector,
-                query_filter=tenant_filter,
-                limit=top_k,
-                with_payload=True,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Qdrant query failed (country=%s, language=%s): %s",
-                country,
-                language,
-                exc,
-            )
-            return []
+        # 2nd Pass
+        fallback_filter = Filter(
+            must=[
+                FieldCondition(key="country", match=MatchValue(value=country)),
+            ],
+            must_not=[
+                FieldCondition(key="language", match=MatchValue(value=language)),
+            ],
+        )
+        fallback_hits = self._client.query_points(
+            collection_name=QDRANT_COLLECTION,
+            query=query_vector,
+            query_filter=fallback_filter,
+            limit=RETRIEVAL_TOP_K_FALLBACK,
+            with_payload=True,
+        )
 
-        hits = []
-        for scored_point in results.points:
-            payload = scored_point.payload or {}
-            hits.append(
+        # Merge Results.
+
+        PRIMARY_WEIGHT = 1.0
+        FALLBACK_WEIGHT = 0.7
+
+        seen_ids = set()
+        merged = []
+        for hit in primary_hits.points:
+            payload = hit.payload
+            weighted_score = round(hit.score * PRIMARY_WEIGHT, 4)
+            merged.append(
                 {
                     **payload,
-                    "match_score": round(scored_point.score, 4),
+                    "excerpt": f"Title: {payload['title']}\n\nBody: {payload['body']}",
+                    "match_score": weighted_score,
+                    "raw_score": hit.score,
+                    "is_fallback": False,
+                }
+            )
+            seen_ids.add(payload["content_id"])
+
+        for hit in fallback_hits.points:
+            payload = hit.payload
+            if payload["content_id"] in seen_ids:
+                continue
+            weighted_score = round(hit.score * FALLBACK_WEIGHT, 4)
+            merged.append(
+                {
+                    **payload,
+                    "excerpt": f"Title: {payload['title']}\n\nBody: {payload['body']}",
+                    "match_score": weighted_score,
+                    "raw_score": hit.score,
+                    "is_fallback": True,
                 }
             )
 
-        logger.debug(
-            "query: %d hits for country=%s language=%s", len(hits), country, language
-        )
-        return hits
+        merged.sort(key=lambda x: x["match_score"], reverse=True)
+
+        logger.debug("query: %d hits for country=%s", len(merged), country)
+
+        return merged
 
     def count(self) -> int:
         info = self._client.get_collection(QDRANT_COLLECTION)

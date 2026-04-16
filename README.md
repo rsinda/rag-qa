@@ -6,7 +6,8 @@ A multi-country B2B retail platform that serves structured content — Terms of 
 
 ## Architecture Diagram
 
-<< PLACEHOLDER FOR DIAGRAM >>
+![Langraph](screenshots/03_langgraph_graph.png)
+
 
 ## Prerequisites
 1. Python 3.11

@@ -13,10 +13,13 @@ class Citation(BaseModel):
     type: str
     excerpt: str
     match_score: float
+    original_language: str  # shows if doc was translated to answer the question.
 
 
 class TraceInfo(BaseModel):
     retrieval_count: int
+    graded_relevant: int  # how many docs survived grading
+    fallback_used: bool  # was other language fallback triggered
     latency_ms: int
     model: str
 
