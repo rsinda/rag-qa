@@ -33,14 +33,19 @@ class AgentState(TypedDict):
     country: str
     language: str
     # Retrieval
-    hits: List[Dict[str, Any]]  # all weighted hits
-    primary_hits: List[Dict[str, Any]]  # same-language hits
-    fallback_hits: List[Dict[str, Any]]  # other-language hits
-    relevant_hits: List[Dict[str, Any]]  # graded-relevant hits (pre-translation)
-    translated_hits: List[Dict[str, Any]]  # after translation (ready for synthesis)
+    # all weighted hits of retrived context
+    hits: List[Dict[str, Any]]
+    # same-language hits of retrived context
+    primary_hits: List[Dict[str, Any]]
+    # other-language hits of retrived context
+    fallback_hits: List[Dict[str, Any]]
+    # graded-relevant hits (pre-translation) of retrived context
+    relevant_hits: List[Dict[str, Any]]
+    # after translation hots (ready for synthesis) of retrived context
+    translated_hits: List[Dict[str, Any]]
     retrieval_count: int
     fallback_used: bool
-    # Same language grading decision
+    # same language document grading decision
     primary_grade_decision: Optional[
         Literal["sufficient", "insufficient", "no_primary_docs"]
     ]
@@ -141,7 +146,7 @@ def retrieve_weighted_node(state: AgentState, store: ContentVectorStore) -> Agen
 def grade_primary_docs_node(state: AgentState, llm) -> AgentState:
     question = state.get("rewritten_query") or state["question"]
 
-    # ── Step 1: no primary docs at all ────────────────────────────────────
+    # if no primary docs found at all
     if not state["primary_hits"]:
         logger.info("No primary-language docs found → routing to fallback grading")
         return {
@@ -150,7 +155,7 @@ def grade_primary_docs_node(state: AgentState, llm) -> AgentState:
             "primary_grade_decision": "no_primary_docs",
         }
 
-    # ── Step 2: grade each primary hit ────────────────────────────────────
+    # Eval each primary hit document
     relevant_primary = _grade_hits(state["primary_hits"], question, llm)
     logger.info(
         "Primary grading: %d/%d kept", len(relevant_primary), len(state["primary_hits"])
@@ -163,7 +168,7 @@ def grade_primary_docs_node(state: AgentState, llm) -> AgentState:
             "primary_grade_decision": "insufficient",
         }
 
-    # ── Step 3: sufficiency check across all kept primary docs ────────────
+    # sufficiency check across all kept primary docs
     context = "\n\n".join(
         f"[{h['content_id']}] grade={h['grade']}\n Title: {h['title']}\n\n Body: {h['body']}"
         for h in relevant_primary
@@ -194,9 +199,9 @@ def grade_primary_docs_node(state: AgentState, llm) -> AgentState:
 def decide_after_primary_grading(state: AgentState) -> str:
     decision = state.get("primary_grade_decision")
     if decision == "sufficient":
-        # Primary docs are good → skip translation entirely
+        # if Primary docs are good then skip translation entirely
         return "synthesize"
-    # "insufficient" or "no_primary_docs" → try fallback language docs
+    # if "insufficient" or "no_primary_docs" then try fallback language docs
     return "grade_fallback_docs"
 
 
@@ -205,7 +210,8 @@ def grade_fallback_docs_node(state: AgentState, llm) -> AgentState:
 
     if not state["fallback_hits"]:
         logger.info("No fallback docs available")
-        return {**state}  # relevant_hits stays as-is (may be empty)
+        # relevant_hits stays as-it is
+        return {**state}
 
     relevant_fallback = _grade_hits(state["fallback_hits"], question, llm)
     logger.info(
@@ -236,7 +242,7 @@ def decide_after_fallback_grading(state: AgentState) -> str:
 def translate_and_fill_node(state: AgentState, llm) -> AgentState:
     target_lang = state["language"]
 
-    # Translate only non-English fallback docs → English
+    # Translate only non-English fallback docs to English
     # We will translate the answer to required target language during synthesis.
     to_translate = [
         h
@@ -308,58 +314,6 @@ def translate_and_fill_node(state: AgentState, llm) -> AgentState:
     translated_hits.sort(key=lambda x: x["match_score"], reverse=True)
 
     return {**state, "translated_hits": translated_hits}
-
-
-# def translate_and_fill_node(state: AgentState, llm) -> AgentState:
-#     target_lang = state["language"]
-#     translated_hits = []
-
-#     for hit in state["relevant_hits"]:
-#         if hit.get("is_fallback") and hit.get("language") != target_lang:
-#             prompt = (
-#                 f"Target language: {target_lang}\n\n"
-#                 f"Content to translate:\n Title: {hit['title']} \n\n Body: {hit['body']}"
-#             )
-#             try:
-#                 raw = llm.invoke(
-#                     [
-#                         SystemMessage(content=TRANSLATE__PROMPT),
-#                         HumanMessage(content=prompt),
-#                     ]
-#                 ).content.strip()
-#                 if raw.startswith("```"):
-#                     raw = raw.split("```")[1].lstrip("json").strip()
-#                 translated_text = json.loads(raw).get("translated", hit["excerpt"])
-#                 logger.info(
-#                     "Translated %s (%s → %s)",
-#                     hit["content_id"],
-#                     hit["language"],
-#                     target_lang,
-#                 )
-#             except Exception as exc:
-
-#                 logger.warning("Translation failed for %s: %s", hit["content_id"], exc)
-#                 translated_text = hit["excerpt"]
-
-#             translated_hits.append(
-#                 {
-#                     **hit,
-#                     "excerpt": translated_text,
-#                     "original_language": hit["language"],
-#                     "language": target_lang,
-#                 }
-#             )
-#         else:
-#             # Primary-language doc — pass through as-is
-#             translated_hits.append(
-#                 {
-#                     **hit,
-#                     "excerpt": translated_text,
-#                     "original_language": hit.get("language", target_lang),
-#                 }
-#             )
-
-#     return {**state, "translated_hits": translated_hits}
 
 
 def empty_response_node(state: AgentState) -> AgentState:
@@ -466,7 +420,8 @@ def grade_answer_node(state: AgentState, llm) -> AgentState:
         grade = json.loads(raw).get("grade", "useful")
     except Exception as exc:
         logger.warning("Answer grading failed: %s", exc)
-        grade = "useful"  # assume OK on parse failure
+        # assuming OK on parse failure
+        grade = "useful"
 
     logger.info("Answer grade: %s", grade)
     state["citations"] = [{**c, "excerpt": c["body"][:250]} for c in state["citations"]]
@@ -550,10 +505,10 @@ def build_graph(store: ContentVectorStore):
 
     g.add_edge("format", END)
 
-    # Save graph for visualization
-    graph_image = g.compile().get_graph().draw_mermaid_png()
-    with open("screenshots/03_langgraph_graph.png", "wb") as f:
-        f.write(graph_image)
+    # # Save graph for visualization
+    # graph_image = g.compile().get_graph().draw_mermaid_png()
+    # with open("screenshots/03_langgraph_graph.png", "wb") as f:
+    #     f.write(graph_image)
     return g.compile()
 
 
